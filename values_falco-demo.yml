@@ -1,0 +1,241 @@
+
+###############################
+# General deployment settings #
+###############################
+
+image:
+  pullPolicy: IfNotPresent
+  registry: docker.io
+  repository: falcosecurity/falco-no-driver
+  tag: ""
+
+rbac:
+  create: true
+
+podSecurityContext: {}
+
+containerSecurityContext: {}
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 512Mi
+  limits:
+    cpu: 1000m
+    memory: 1024Mi
+
+nodeSelector: {}
+
+affinity: {}
+
+tolerations:
+  - effect: NoSchedule
+    key: node-role.kubernetes.io/master
+  - effect: NoSchedule
+    key: node-role.kubernetes.io/control-plane
+
+healthChecks:
+  livenessProbe:
+    initialDelaySeconds: 60
+    timeoutSeconds: 5
+    periodSeconds: 15
+  readinessProbe:
+    initialDelaySeconds: 30
+    timeoutSeconds: 5
+    periodSeconds: 15
+
+tty: false
+
+#########################
+# Scenario requirements #
+#########################
+
+controller:
+  # Available options: deployment, daemonset.
+  kind: daemonset  ## Use daemonset for Prod Environments
+  daemonset:
+    updateStrategy:
+      type: RollingUpdate
+  deployment:
+    replicas: []
+
+# Driver settings (scenario requirement)
+driver:
+  enabled: true
+  kind: module
+  ebpf:
+    path:
+    hostNetwork: false
+    leastPrivileged: false
+  loader:
+    enabled: true
+    initContainer:
+      enabled: true
+      image:
+        pullPolicy: IfNotPresent
+        registry: docker.io
+        repository: falcosecurity/falco-driver-loader
+        tag: ""
+      env: {}
+      args: []
+      resources: {}
+      securityContext: {}
+
+gvisor:
+  enabled: false
+  runsc:
+    path: /home/containerd/usr/local/sbin
+    root: /run/containerd/runsc
+    config: /run/containerd/runsc/config.toml
+
+collectors:
+  enabled: true
+  docker:
+    enabled: true
+    socket: /var/run/docker.sock
+  containerd:
+    enabled: true
+    socket: /run/containerd/containerd.sock
+  crio:
+    enabled: true
+    socket: /run/crio/crio.sock
+  kubernetes:
+    enabled: true
+    apiAuth: /var/run/secrets/kubernetes.io/serviceaccount/token
+    apiUrl: "https://$(KUBERNETES_SERVICE_HOST)"
+    enableNodeFilter: true
+
+########################
+# Falco integrations   #
+########################
+
+# For configuration values, see https://github.com/falcosecurity/charts/blob/master/falcosidekick/values.yaml
+
+falcosidekick:
+  enabled: yes
+  replicaCount: 2
+  fullfqdn: false
+  # -- Listen port. Default value: 2801
+  listenPort: ""
+
+  service:
+    annotations: {} 
+  webui:
+    enabled: true
+    replicaCount: 2
+    loglevel: info #{"debug", "info", "warning", "error"}
+     # -- User in format <login>:<password>
+    user: "admin:admin"
+    image:
+      registry: docker.io
+      repository: falcosecurity/falcosidekick-ui
+      tag: "v2.1.0"
+    podSecurityContext:
+      runAsUser: 1234
+      fsGroup: 1234
+    podAnnotations: {}
+    podLabels: {}
+    service:
+      port: 2802 # The web UI service port for the falcosidekick-ui | Default is 2802
+      targetPort: 2802 # The web UI service targetPort | Default is 2802
+      annotations: {}
+    
+  redis:
+    enabled: true
+    service:
+      type: ClusterIP
+      port: 6379
+      targetPort: 6379
+      annotations: {}     
+
+######################
+# falco.yaml config  #
+######################
+falco:
+# The files will be read in the order presented here, so make sure if
+# you have overrides they appear in later files.
+# -- The location of the rules files that will be consumed by Falco.
+  rules_file:
+    - /etc/falco/falco_rules.yaml
+    - /etc/falco/falco_rules.local.yaml
+    - /etc/falco/rules.d
+
+  load_plugins: []   
+  # No plugins are loaded as they are not compatible with the driver version of Falco capturing sycalls. 
+  # A separate deployment of falco will be required for plugins usage.
+
+  watch_config_files: true
+  time_format_iso_8601: false
+  json_output: false
+  json_include_output_property: true
+  json_include_tags_property: true
+  log_stderr: true
+  log_syslog: true
+  log_level: info
+  libs_logger:
+    enabled: false
+    severity: debug
+
+  priority: debug
+
+  buffered_outputs: false
+
+  syscall_event_drops:
+    threshold: .1
+    actions:
+      - log
+      - alert
+    rate: .03333
+    max_burst: 1
+
+  syscall_event_timeouts:
+    max_consecutives: 1000
+
+  syscall_buf_size_preset: 4
+
+  output_timeout: 2000
+
+  outputs:
+    rate: 1
+    max_burst: 1000
+
+  syslog_output:
+    enabled: true
+
+  file_output:
+    enabled: false
+    keep_alive: false
+    filename: ./events.txt
+
+  stdout_output:
+    enabled: true
+    
+  webserver:
+    enabled: true
+    listen_port: 8765
+    k8s_healthz_endpoint: /healthz
+    ssl_enabled: false
+    ssl_certificate: /etc/falco/falco.pem
+
+  program_output:
+    enabled: false
+    keep_alive: false
+    program: "jq '{text: .output}' | curl -d @- -X POST https://hooks.slack.com/services/XXX"
+
+  http_output:
+    enabled: false
+    url: ""
+    user_agent: "falcosecurity/falco"
+ 
+  grpc:
+    enabled: false
+    bind_address: "unix:///run/falco/falco.sock"
+    threadiness: 0
+
+  grpc_output:
+    enabled: false
+
+  metadata_download:
+    max_mb: 100
+    chunk_wait_us: 1000
+    watch_freq_sec: 1
